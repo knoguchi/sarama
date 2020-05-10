@@ -1,44 +1,44 @@
 #!/bin/sh
-
 set -ex
 
-# Launch and wait for toxiproxy
-${REPOSITORY_ROOT}/vagrant/run_toxiproxy.sh &
-while ! nc -q 1 localhost 2185 </dev/null; do echo "Waiting"; sleep 1; done
-while ! nc -q 1 localhost 9095 </dev/null; do echo "Waiting"; sleep 1; done
+BASEDIR=$(dirname "$0")
+cd $BASEDIR
 
-# Launch and wait for Zookeeper
-KAFKA_HEAP_OPTS="-Xmx192m -Dzookeeper.admin.enableServer=false"
-export KAFKA_HEAP_OPTS
-for i in 1 2 3 4 5; do
-    KAFKA_PORT=`expr $i + 9090`
-    cd ${KAFKA_INSTALL_ROOT}/kafka-${KAFKA_PORT} && bin/zookeeper-server-start.sh -daemon config/zookeeper.properties
-done
-while ! nc -q 1 localhost 21805 </dev/null; do echo "Waiting"; sleep 1; done
+. ./settings.rc
 
-# Launch and wait for Kafka
-KAFKA_HEAP_OPTS="-Xmx320m"
-export KAFKA_HEAP_OPTS
-for i in 1 2 3 4 5; do
-    KAFKA_PORT=`expr $i + 9090`
-    cd ${KAFKA_INSTALL_ROOT}/kafka-${KAFKA_PORT} && bash bin/kafka-server-start.sh -daemon config/server.properties
-done
-ps auxww | grep -i kafka
+supervisorctl reload
 
-N=120
-RC=1
-set +x
-printf "Waiting for kafka5 to become available."
-for _ in $(seq 1 "$N"); do
-  if nc -z 127.0.0.1 29095 </dev/null; then
-      RC=0
-      break
-  fi
-  sleep 1
+ZK_REAL_PORT=$(( $ZK_REAL_PORT_BASE + 1 ))
+# make sure the broker is up
+while ! nc -q 1 localhost ${ZK_REAL_PORT} </dev/null; do echo "Waiting for Zookeeper"; sleep 1; done
+
+# make sure toxiproxy is up
+while ! nc -q 1 localhost ${TOXIPROXY_PORT} </dev/null; do echo "Waiting for Toxiproxy"; sleep 1; done
+echo "It takes sometime for toxiproxy API to be ready"
+sleep 60
+
+# submit toxiproxy config
+for N in $(seq 1 $NUM_INSTANCES); do
+    # Zookeeper
+    ZK_NAME="zookeeper-${N}"
+    ZK_PROXY_PORT=$(( $ZK_PROXY_PORT_BASE + $N ))
+    ZK_REAL_PORT=$(( $ZK_REAL_PORT_BASE + $N ))
+    ${BIN}/toxiproxy-cli create $ZK_NAME -l 0.0.0.0:$ZK_PROXY_PORT -u localhost:$ZK_REAL_PORT
+
+    # Kafka
+    KAFKA_NAME="kafka-${N}"
+    KAFKA_PROXY_PORT=$(( $KAFKA_PROXY_PORT_BASE + $N ))
+    KAFKA_REAL_PORT=$(( $KAFKA_REAL_PORT_BASE + $N ))
+    ${BIN}/toxiproxy-cli create $KAFKA_NAME -l 0.0.0.0:$KAFKA_PROXY_PORT -u $KAFKA_HOSTNAME:$KAFKA_REAL_PORT
+done	 
+
+# make sure the proxied Zookeeper is up
+while ! nc -q 1 localhost ${ZK_PROXY_PORT} </dev/null; do echo "Waiting for Zookeeper via Toxiproxy"; sleep 1; done
+
+# make sure the proxied Kafka is up
+for N in $(seq 1 $NUM_INSTANCES); do
+    KAFKA_PROXY_PORT=$(( $KAFKA_PROXY_PORT_BASE + $N ))
+    while ! nc -q 1 ${KAFKA_HOSTNAME} ${KAFKA_PROXY_PORT} </dev/null; do echo "Waiting for Kafka ${N} via Toxiproxy"; sleep 1; done
 done
-printf "\n"
-if [ "$RC" -gt 0 ]; then
-  echo 'Error: kafka5 failed to startup' >&2
-  find "${KAFKA_INSTALL_ROOT}/kafka-${KAFKA_PORT}" -name "server.log" -print0 | xargs -0 --no-run-if-empty tail -256
-  exit ${RC}
-fi
+echo "Boot completed.  Services are runing"
+

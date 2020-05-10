@@ -2,16 +2,22 @@
 
 set -ex
 
+FILES="install_cluster.sh setup_services.sh create_topics.sh run_java_producer.sh boot_cluster.sh halt_cluster.sh run_toxiproxy.sh"
+DEBS="default-jre supervisor"
+
+BASEDIR=/vagrant/vagrant
+. $BASEDIR/settings.rc
+cd $BASEDIR
+
 apt-get update
-yes | apt-get install default-jre
+yes | apt-get install $DEBS
 
-export KAFKA_INSTALL_ROOT=/opt
-export KAFKA_HOSTNAME=192.168.100.67
-export KAFKA_VERSION=1.0.2
-export KAFKA_SCALA_VERSION=2.11
-export REPOSITORY_ROOT=/vagrant
 
-sh /vagrant/vagrant/install_cluster.sh
-sh /vagrant/vagrant/setup_services.sh
-sh /vagrant/vagrant/create_topics.sh
-sh /vagrant/vagrant/run_java_producer.sh
+mkdir -p $BIN
+cp settings.rc $BIN
+cp $FILES $BIN
+
+sh ${BIN}/install_cluster.sh
+sh ${BIN}/setup_services.sh
+sh ${BIN}/create_topics.sh
+sh ${BIN}/run_java_producer.sh
